@@ -75,6 +75,7 @@ public:
 	virtual bool IsModified() const override;
 	virtual bool CanAdd() const override;
 	virtual bool IsConflicted() const override;
+	virtual bool CanRevert() const override;
 
 public:
 	/** History of the item, if any */
