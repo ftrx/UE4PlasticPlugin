@@ -4,12 +4,14 @@
 
 #include "PlasticSourceControlMenu.h"
 
+#include "PlasticSourceControlModule.h"
 #include "PlasticSourceControlProvider.h"
 #include "PlasticSourceControlOperations.h"
 
 #include "ISourceControlOperation.h"
 #include "SourceControlOperations.h"
 
+#include "Editor.h"
 #include "LevelEditor.h"
 #include "Widgets/Notifications/SNotificationList.h"
 #include "Framework/Notifications/NotificationManager.h"
@@ -17,6 +19,9 @@
 #include "Misc/MessageDialog.h"
 #include "EditorStyleSet.h"
 
+#include "PackageTools.h"
+#include "Engine/World.h"
+#include "FileHelpers.h"
 
 #include "Logging/MessageLog.h"
 
@@ -53,31 +58,154 @@ bool FPlasticSourceControlMenu::IsSourceControlConnected() const
 	return Provider.IsEnabled() && Provider.IsAvailable();
 }
 
+void FPlasticSourceControlMenu::UnloadPackagesSyncAndReloadMap()
+{
+	// Prompt to save or discard all packages
+	bool bOkToExit = false;
+	bool bHadPackagesToSave = false;
+	{
+		const bool bPromptUserToSave = true;
+		const bool bSaveMapPackages = true;
+		const bool bSaveContentPackages = true;
+		const bool bFastSave = false;
+		const bool bNotifyNoPackagesSaved = false;
+		const bool bCanBeDeclined = true; // If the user clicks "don't save" this will continue and lose their changes
+		bOkToExit = FEditorFileUtils::SaveDirtyPackages(bPromptUserToSave, bSaveMapPackages, bSaveContentPackages, bFastSave, bNotifyNoPackagesSaved, bCanBeDeclined, &bHadPackagesToSave);
+	}
+
+	// bOkToExit can be true if the user selects to not save an asset by unchecking it and clicking "save"
+	if (bOkToExit)
+	{
+		TArray<UPackage*> DirtyPackages;
+		FEditorFileUtils::GetDirtyWorldPackages(DirtyPackages);
+		FEditorFileUtils::GetDirtyContentPackages(DirtyPackages);
+		bOkToExit = DirtyPackages.Num() == 0;
+	}
+
+	if (bOkToExit)
+	{
+		FPlasticSourceControlModule& PlasticSourceControl = FModuleManager::LoadModuleChecked<FPlasticSourceControlModule>("PlasticSourceControl");
+		FPlasticSourceControlProvider& Provider = PlasticSourceControl.GetProvider();
+
+		// Unload all packages in repository
+		TArray<FString> PackageRelativePaths;
+		FPackageName::FindPackagesInDirectory(PackageRelativePaths, *Provider.GetPathToWorkspaceRoot());
+
+		TArray<FString> PackageNames;
+		PackageNames.Reserve(PackageRelativePaths.Num());
+		for(const FString& Path : PackageRelativePaths)
+		{
+			FString PackageName;
+			FString FailureReason;
+			if (FPackageName::TryConvertFilenameToLongPackageName(Path, PackageName, &FailureReason))
+			{
+				PackageNames.Add(PackageName);
+			}
+			else
+			{
+				FMessageLog("PlasticSourceControl").Error(FText::FromString(FailureReason));
+			}
+		}
+
+		const FString WorldPackageFilenameToReload = UnloadPackagesAndMap(PackageNames);
+
+		// Prepare a "Sync" Source Control operations synchronously
+		TSharedRef<FSync, ESPMode::ThreadSafe> SyncOperation = ISourceControlOperation::Create<FSync>();
+		TArray<FString> WorkspaceRoot;
+		WorkspaceRoot.Add(Provider.GetPathToWorkspaceRoot()); // Revert the root of the workspace (needs an absolute path)
+
+		// Display an ongoing notification during the whole operation
+		DisplayInProgressNotification(SyncOperation->GetInProgressString());
+		const ECommandResult::Type Result = Provider.Execute(SyncOperation, WorkspaceRoot);
+		OnSourceControlOperationComplete(SyncOperation, Result);
+		
+		ReloadMap(WorldPackageFilenameToReload);
+	}
+	else
+	{
+		FMessageLog ErrorMessage("PlasticSourceControl");
+		ErrorMessage.Warning(LOCTEXT("SourceControlMenu_Sync_Unsaved", "Save All Assets before attempting to Sync!"));
+		ErrorMessage.Notify();
+	}
+
+}
+
+FString FPlasticSourceControlMenu::UnloadPackagesAndMap(const TArray<FString>& InPackageNames)
+{
+	FString OutWorldPackageFilenameToReload;
+
+	// Inspired from ContentBrowserUtils.cpp and PackageRestore.cpp
+	if (InPackageNames.Num() > 0)
+	{
+		// Form a list of loaded packages to unload
+		TArray<UPackage*> LoadedPackages;
+		LoadedPackages.Reserve(InPackageNames.Num());
+		for(const FString& PackageName : InPackageNames)
+		{
+			UPackage* Package = FindPackage(nullptr, *PackageName);
+			if (Package != nullptr)
+			{
+				LoadedPackages.Add(Package);
+			}
+		}
+
+		// Search for the Map filename of the current loaded Level World
+		const int32 NumLoadedWorldFound = LoadedPackages.RemoveAll([&](UPackage* Package)
+			{
+				const UWorld* ExistingWorld = UWorld::FindWorldInPackage(Package);
+				if (ExistingWorld && ExistingWorld->WorldType == EWorldType::Editor)
+				{
+					return true;
+				}
+				return false;
+			});
+
+		if (NumLoadedWorldFound > 0)
+		{
+			UPackage* const CurrentWorldPackage = CastChecked<UPackage>(GWorld->GetOuter());
+			OutWorldPackageFilenameToReload = USourceControlHelpers::PackageFilename(CurrentWorldPackage);
+
+			// Replaces currently loaded world by an empty new world. Note that this may fail.
+			// This will make the UPackages from loaded worlds invalid, thankfully they have already been removed from LoadedPackages
+			// This will also prompt for save and can be skipped by the user
+			UE_LOG(LogSourceControl, Log, TEXT("Unloading Map %s"), *CurrentWorldPackage->GetName());
+			GEditor->CreateNewMapForEditing();
+		}
+
+		UE_LOG(LogSourceControl, Log, TEXT("Unloading %d Packages..."), LoadedPackages.Num());
+		FText ErrorMessage;
+		PackageTools::UnloadPackages(LoadedPackages, ErrorMessage);
+		if (!ErrorMessage.IsEmpty())
+		{
+			FMessageDialog::Open(EAppMsgType::Ok, ErrorMessage);
+		}
+	}
+
+	return OutWorldPackageFilenameToReload;
+}
+
+void FPlasticSourceControlMenu::ReloadMap(const FString& InWorldPackageFilenameToReload)
+{
+	UE_LOG(LogSourceControl, Log, TEXT("Reloading Map file %s..."), *InWorldPackageFilenameToReload);
+
+	// Reload the current world if any, which reloads all required assets
+	if (!InWorldPackageFilenameToReload.IsEmpty())
+	{
+		FEditorFileUtils::LoadMap(InWorldPackageFilenameToReload);
+	}
+}
+
 void FPlasticSourceControlMenu::SyncProjectClicked()
 {
 	if (!OperationInProgressNotification.IsValid())
 	{
-		// Launch a "Sync" Operation
-		FPlasticSourceControlModule& PlasticSourceControl = FModuleManager::LoadModuleChecked<FPlasticSourceControlModule>("PlasticSourceControl");
-		FPlasticSourceControlProvider& Provider = PlasticSourceControl.GetProvider();
-		TSharedRef<FSync, ESPMode::ThreadSafe> SyncOperation = ISourceControlOperation::Create<FSync>();
-		TArray<FString> WorkspaceRoot;
-		WorkspaceRoot.Add(Provider.GetPathToWorkspaceRoot()); // Revert the root of the workspace (needs an absolute path)
-		ECommandResult::Type Result = Provider.Execute(SyncOperation, WorkspaceRoot, EConcurrency::Asynchronous, FSourceControlOperationComplete::CreateRaw(this, &FPlasticSourceControlMenu::OnSourceControlOperationComplete));
-		if (Result == ECommandResult::Succeeded)
-		{
-			// Display an ongoing notification during the whole operation
-			DisplayInProgressNotification(SyncOperation->GetInProgressString());
-		}
-		else
-		{
-			// Report failure with a notification
-			DisplayFailureNotification(SyncOperation->GetName());
-		}
+		UnloadPackagesSyncAndReloadMap();
 	}
 	else
 	{
-		FMessageLog("LogSourceControl").Warning(LOCTEXT("SourceControlMenu_InProgress", "Source control operation already in progress"));
+		FMessageLog LogSourceControl("LogSourceControl");
+		LogSourceControl.Warning(LOCTEXT("SourceControlMenu_InProgress", "Source control operation already in progress"));
+		LogSourceControl.Notify();
 	}
 }
 
@@ -105,7 +233,9 @@ void FPlasticSourceControlMenu::RevertUnchangedClicked()
 	}
 	else
 	{
-		FMessageLog("LogSourceControl").Warning(LOCTEXT("SourceControlMenu_InProgress", "Source control operation already in progress"));
+		FMessageLog LogSourceControl("LogSourceControl");
+		LogSourceControl.Warning(LOCTEXT("SourceControlMenu_InProgress", "Source control operation already in progress"));
+		LogSourceControl.Notify();
 	}
 }
 
@@ -139,7 +269,9 @@ void FPlasticSourceControlMenu::RevertAllClicked()
 	}
 	else
 	{
-		FMessageLog("LogSourceControl").Warning(LOCTEXT("SourceControlMenu_InProgress", "Source control operation already in progress"));
+		FMessageLog LogSourceControl("LogSourceControl");
+		LogSourceControl.Warning(LOCTEXT("SourceControlMenu_InProgress", "Source control operation already in progress"));
+		LogSourceControl.Notify();
 	}
 }
 
@@ -167,7 +299,9 @@ void FPlasticSourceControlMenu::RefreshClicked()
 	}
 	else
 	{
-		FMessageLog("LogSourceControl").Warning(LOCTEXT("SourceControlMenu_InProgress", "Source control operation already in progress"));
+		FMessageLog LogSourceControl("LogSourceControl");
+		LogSourceControl.Warning(LOCTEXT("SourceControlMenu_InProgress", "Source control operation already in progress"));
+		LogSourceControl.Notify();
 	}
 }
 

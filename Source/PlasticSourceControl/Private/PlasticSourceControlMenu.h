@@ -24,6 +24,10 @@ public:
 private:
 	bool IsSourceControlConnected() const;
 
+	void UnloadPackagesSyncAndReloadMap();
+	FString UnloadPackagesAndMap(const TArray<FString>& InPackageNames);
+	void ReloadMap(const FString& InWorldPackageFilenameToReload);
+
 	void AddMenuExtension(FMenuBuilder& Builder);
 
 	TSharedRef<class FExtender> OnExtendLevelEditorViewMenu(const TSharedRef<class FUICommandList> CommandList);
