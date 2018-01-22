@@ -139,6 +139,8 @@ void FPlasticSourceControlMenu::PreparePackagesForReload(const TArray<FString>& 
 		// Form a list of loaded packages to unload
 		TArray<UPackage*> LoadedPackages;
 		LoadedPackages.Reserve(InPackageNames.Num());
+		UE_LOG(LogSourceControl, Log, TEXT("PreparePackagesForReload: LoadedPackages.Num()=%d"), InPackageNames.Num());
+		size_t Index = 0;
 		for(const FString& PackageName : InPackageNames)
 		{
 			UPackage* Package = FindPackage(nullptr, *PackageName);
@@ -146,14 +148,17 @@ void FPlasticSourceControlMenu::PreparePackagesForReload(const TArray<FString>& 
 			{
 				LoadedPackages.Add(Package);
 				OutPackageNamesToReload.Add(Package->GetName());
+				UE_LOG(LogSourceControl, Log, TEXT("%d: %s"), Index++, *Package->GetName());
 			}
 		}
+		UE_LOG(LogSourceControl, Log, TEXT("PreparePackagesForReload: OutPackageNamesToReload.Num()=%d"), OutPackageNamesToReload.Num());
 
 		const int32 NumLoadedWorldFound = LoadedPackages.RemoveAll([&](UPackage* Package)
 			{
 				const UWorld* ExistingWorld = UWorld::FindWorldInPackage(Package);
 				if (ExistingWorld && ExistingWorld->WorldType == EWorldType::Editor)
 				{
+					UE_LOG(LogSourceControl, Log, TEXT("PreparePackagesForReload: LoadedWorldFound=%s"), *Package->GetName());
 					return true;
 				}
 				return false;
@@ -162,10 +167,13 @@ void FPlasticSourceControlMenu::PreparePackagesForReload(const TArray<FString>& 
 		if (NumLoadedWorldFound > 0)
 		{
 			UPackage* const CurrentWorldPackage = CastChecked<UPackage>(GWorld->GetOuter());
+			UE_LOG(LogSourceControl, Log, TEXT("PreparePackagesForReload: CurrentWorldPackage=%s"), *CurrentWorldPackage->GetName());
 			OutWorldPackageFilenameToReload = USourceControlHelpers::PackageFilename(CurrentWorldPackage);
+			UE_LOG(LogSourceControl, Log, TEXT("PreparePackagesForReload: OutWorldPackageFilenameToReload=%s"), *OutWorldPackageFilenameToReload);
 
 			// Remove the Map from the package list to reload it separately, at the very last step
 			OutPackageNamesToReload.Remove(CurrentWorldPackage->GetName());
+			UE_LOG(LogSourceControl, Log, TEXT("PreparePackagesForReload: OutPackageNamesToReload.Num()=%d"), OutPackageNamesToReload.Num());
 
 			// Replaces currently loaded world by an empty new world. Note that this may fail.
 			// This will make the UPackages from loaded worlds invalid, thankfully they have already been removed from LoadedPackages
@@ -173,6 +181,7 @@ void FPlasticSourceControlMenu::PreparePackagesForReload(const TArray<FString>& 
 			GEditor->CreateNewMapForEditing();
 		}
 
+		UE_LOG(LogSourceControl, Log, TEXT("Unloading %d Packages..."), LoadedPackages.Num());
 		FText ErrorMessage;
 		PackageTools::UnloadPackages(LoadedPackages, ErrorMessage);
 		if (!ErrorMessage.IsEmpty())
@@ -187,16 +196,21 @@ void FPlasticSourceControlMenu::ReloadPackages(const TArray<FString>& InPackageN
 	UE_LOG(LogSourceControl, Log, TEXT("Reloading %d Packages..."), InPackageNamesToReload.Num());
 
 	// Inspired from ContentBrowserUtils.cpp and PackageRestore.cpp
+	size_t Index = 0;
 	for(const FString& PackageName : InPackageNamesToReload)
 	{
+		UE_LOG(LogSourceControl, Log, TEXT("%d: %s"), Index++, *PackageName);
 		PackageTools::LoadPackage(PackageName);
 	}
 
 	// Also reload the current world if we caused it to be unloaded
 	if (!InWorldPackageFilenameToReload.IsEmpty())
 	{
+		UE_LOG(LogSourceControl, Log, TEXT("ReloadPackages: InWorldPackageFilenameToReload=%s"), *InWorldPackageFilenameToReload);
 		FEditorFileUtils::LoadMap(InWorldPackageFilenameToReload);
 	}
+
+	UE_LOG(LogSourceControl, Log, TEXT("ReloadPackages done"));
 }
 
 void FPlasticSourceControlMenu::SyncProjectClicked()
