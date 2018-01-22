@@ -118,13 +118,13 @@ void FPlasticSourceControlMenu::UnloadPackagesSyncAndReloadMap()
 		DisplayInProgressNotification(SyncOperation->GetInProgressString());
 		const ECommandResult::Type Result = Provider.Execute(SyncOperation, WorkspaceRoot);
 		OnSourceControlOperationComplete(SyncOperation, Result);
-		
+
 		ReloadMap(WorldPackageFilenameToReload);
 	}
 	else
 	{
 		FMessageLog ErrorMessage("PlasticSourceControl");
-		ErrorMessage.Warning(LOCTEXT("SourceControlMenu_Sync_Unsaved", "Save All Assets before attempting to Sync!"));
+		ErrorMessage.Warning(LOCTEXT("SourceControlMenu_Sync_Unsaved", "Save All Assets before attempting to Sync!")); // TODO: rework this and all other Notifications
 		ErrorMessage.Notify();
 	}
 
@@ -140,6 +140,8 @@ FString FPlasticSourceControlMenu::UnloadPackagesAndMap(const TArray<FString>& I
 		// Form a list of loaded packages to unload
 		TArray<UPackage*> LoadedPackages;
 		LoadedPackages.Reserve(InPackageNames.Num());
+		UE_LOG(LogSourceControl, Log, TEXT("UnloadPackagesAndMap: LoadedPackages.Num()=%d"), InPackageNames.Num());
+		size_t Index = 0;
 		for(const FString& PackageName : InPackageNames)
 		{
 			UPackage* Package = FindPackage(nullptr, *PackageName);
@@ -155,6 +157,7 @@ FString FPlasticSourceControlMenu::UnloadPackagesAndMap(const TArray<FString>& I
 				const UWorld* ExistingWorld = UWorld::FindWorldInPackage(Package);
 				if (ExistingWorld && ExistingWorld->WorldType == EWorldType::Editor)
 				{
+					UE_LOG(LogSourceControl, Log, TEXT("UnloadPackagesAndMap: LoadedWorldFound=%s"), *Package->GetName());
 					return true;
 				}
 				return false;
@@ -163,7 +166,9 @@ FString FPlasticSourceControlMenu::UnloadPackagesAndMap(const TArray<FString>& I
 		if (NumLoadedWorldFound > 0)
 		{
 			UPackage* const CurrentWorldPackage = CastChecked<UPackage>(GWorld->GetOuter());
+			UE_LOG(LogSourceControl, Log, TEXT("UnloadPackagesAndMap: CurrentWorldPackage=%s"), *CurrentWorldPackage->GetName());
 			OutWorldPackageFilenameToReload = USourceControlHelpers::PackageFilename(CurrentWorldPackage);
+			UE_LOG(LogSourceControl, Log, TEXT("UnloadPackagesAndMap: OutWorldPackageFilenameToReload=%s"), *OutWorldPackageFilenameToReload);
 
 			// Replaces currently loaded world by an empty new world. Note that this may fail.
 			// This will make the UPackages from loaded worlds invalid, thankfully they have already been removed from LoadedPackages
@@ -191,8 +196,11 @@ void FPlasticSourceControlMenu::ReloadMap(const FString& InWorldPackageFilenameT
 	// Reload the current world if any, which reloads all required assets
 	if (!InWorldPackageFilenameToReload.IsEmpty())
 	{
-		FEditorFileUtils::LoadMap(InWorldPackageFilenameToReload);
+		const bool bOk = FEditorFileUtils::LoadMap(InWorldPackageFilenameToReload);
+		UE_LOG(LogSourceControl, Log, TEXT("ReloadMap: InWorldPackageFilenameToReload=%s bOk=%d"), *InWorldPackageFilenameToReload, bOk);
 	}
+
+	UE_LOG(LogSourceControl, Log, TEXT("ReloadMap done"));
 }
 
 void FPlasticSourceControlMenu::SyncProjectClicked()
