@@ -16,6 +16,7 @@ public class PlasticSourceControl : ModuleRules
 			{
 				"Core",
 				"CoreUObject",
+				"Engine",
 				"Slate",
 				"SlateCore",
 				"InputCore",
