@@ -5,6 +5,7 @@
 #ifndef __XmlNode_h__
 #define __XmlNode_h__
 
+#include "CoreMinimal.h"
 /** Forward Decl for implementation */
 class FXmlFile;
 
