@@ -2,6 +2,7 @@
 #include "XmlFile.h"
 #include "Templates/UniquePtr.h"
 #include "XmlCharacterWidthCheck.h"
+#include "FileManager.h"
 
 namespace
 {
