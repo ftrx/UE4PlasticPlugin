@@ -929,6 +929,9 @@ static bool RunFileinfo(const EConcurrency::Type InConcurrency, TArray<FString>&
 		if (	(State.WorkspaceState == EWorkspaceState::Controlled)
 			||	(State.WorkspaceState == EWorkspaceState::Changed)
 			||	(State.WorkspaceState == EWorkspaceState::Replaced)
+			|| (State.WorkspaceState == EWorkspaceState::Conflicted)
+			|| (State.WorkspaceState == EWorkspaceState::CheckedOut) // HACK otherwise Diff does not work
+			|| (State.WorkspaceState == EWorkspaceState::Moved) // HACK  
 		//	||	(State.WorkspaceState == EWorkspaceState::LockedByOther) // we do not have this info at this stage, cf. ParseFileinfoResults()
 			)
 		{
