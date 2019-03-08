@@ -79,6 +79,9 @@ To release the plugin, zip the _Plugins_ folder. But before that, remove the _In
 
 ### Status
 
+#### Version 1.2.1.1 2019/03/08 for UE4.19:
+- support legacy status command from PlasticSCM version 8.0.16.3000 (crash fix)
+
 #### Version 1.2.1 2018/03/16 for UE4.19:
 - manage connection to the server
 - show current branch name and CL in status text
@@ -103,6 +106,7 @@ To release the plugin, zip the _Plugins_ folder. But before that, remove the _In
 - top-menu global "undo unchanged" and "undo all checkout"
 - [Partial Checkin (like Gluon, for artists)](http://blog.plasticscm.com/2015/03/plastic-gluon-is-out-version-control.html)
 - Plastic Cloud is fully supported
+
 - Windows only
 
 #### Feature Requests
