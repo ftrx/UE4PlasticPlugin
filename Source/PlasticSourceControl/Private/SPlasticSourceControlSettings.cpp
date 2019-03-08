@@ -1,4 +1,4 @@
-// Copyright (c) 2016-2017 Codice Software - Sebastien Rombauts (sebastien.rombauts@gmail.com)
+// Copyright (c) 2016-2018 Codice Software - Sebastien Rombauts (sebastien.rombauts@gmail.com)
 
 #include "PlasticSourceControlPrivatePCH.h"
 #include "SPlasticSourceControlSettings.h"
@@ -314,7 +314,7 @@ void SPlasticSourceControlSettings::Construct(const FArguments& InArgs)
 
 FText SPlasticSourceControlSettings::GetBinaryPathText() const
 {
-	FPlasticSourceControlModule& PlasticSourceControl = FModuleManager::LoadModuleChecked<FPlasticSourceControlModule>("PlasticSourceControl");
+	const FPlasticSourceControlModule& PlasticSourceControl = FModuleManager::LoadModuleChecked<FPlasticSourceControlModule>("PlasticSourceControl");
 	return FText::FromString(PlasticSourceControl.AccessSettings().GetBinaryPath());
 }
 
@@ -335,20 +335,20 @@ void SPlasticSourceControlSettings::OnBinaryPathTextCommited(const FText& InText
 
 FText SPlasticSourceControlSettings::GetPathToWorkspaceRoot() const
 {
-	FPlasticSourceControlModule& PlasticSourceControl = FModuleManager::LoadModuleChecked<FPlasticSourceControlModule>("PlasticSourceControl");
+   const FPlasticSourceControlModule& PlasticSourceControl = FModuleManager::LoadModuleChecked<FPlasticSourceControlModule>("PlasticSourceControl");
 	return FText::FromString(PlasticSourceControl.GetProvider().GetPathToWorkspaceRoot());
 }
 
 FText SPlasticSourceControlSettings::GetUserName() const
 {
-	FPlasticSourceControlModule& PlasticSourceControl = FModuleManager::LoadModuleChecked<FPlasticSourceControlModule>("PlasticSourceControl");
+   const FPlasticSourceControlModule& PlasticSourceControl = FModuleManager::LoadModuleChecked<FPlasticSourceControlModule>("PlasticSourceControl");
 	return FText::FromString(PlasticSourceControl.GetProvider().GetUserName());
 }
 
 
 EVisibility SPlasticSourceControlSettings::CanInitializePlasticWorkspace() const
 {
-	FPlasticSourceControlModule& PlasticSourceControl = FModuleManager::LoadModuleChecked<FPlasticSourceControlModule>("PlasticSourceControl");
+   const FPlasticSourceControlModule& PlasticSourceControl = FModuleManager::LoadModuleChecked<FPlasticSourceControlModule>("PlasticSourceControl");
 	const bool bPlasticAvailable = PlasticSourceControl.GetProvider().IsPlasticAvailable();
 	const bool bPlasticWorkspaceFound = PlasticSourceControl.GetProvider().IsWorkspaceFound();
 	return (bPlasticAvailable && !bPlasticWorkspaceFound) ? EVisibility::Visible : EVisibility::Collapsed;
@@ -438,7 +438,7 @@ void SPlasticSourceControlSettings::LaunchMakeWorkspaceOperation()
 	ECommandResult::Type Result = PlasticSourceControl.GetProvider().Execute(MakeWorkspaceOperation, TArray<FString>(), EConcurrency::Asynchronous, FSourceControlOperationComplete::CreateSP(this, &SPlasticSourceControlSettings::OnSourceControlOperationComplete));
 	if (Result == ECommandResult::Succeeded)
 	{
-		DisplayInProgressNotification(MakeWorkspaceOperation);
+		DisplayInProgressNotification(MakeWorkspaceOperation->GetInProgressString());
 	}
 	else
 	{
@@ -467,7 +467,7 @@ void SPlasticSourceControlSettings::LaunchMarkForAddOperation()
 		ECommandResult::Type Result = PlasticSourceControl.GetProvider().Execute(MarkForAddOperation, ProjectFiles, EConcurrency::Asynchronous, FSourceControlOperationComplete::CreateSP(this, &SPlasticSourceControlSettings::OnSourceControlOperationComplete));
 		if (Result == ECommandResult::Succeeded)
 		{
-			DisplayInProgressNotification(MarkForAddOperation);
+			DisplayInProgressNotification(MarkForAddOperation->GetInProgressString());
 		}
 		else
 		{
@@ -490,7 +490,7 @@ void SPlasticSourceControlSettings::LaunchCheckInOperation()
 	ECommandResult::Type Result = PlasticSourceControl.GetProvider().Execute(CheckInOperation, ProjectFiles, EConcurrency::Asynchronous, FSourceControlOperationComplete::CreateSP(this, &SPlasticSourceControlSettings::OnSourceControlOperationComplete));
 	if (Result == ECommandResult::Succeeded)
 	{
-		DisplayInProgressNotification(CheckInOperation);
+		DisplayInProgressNotification(CheckInOperation->GetInProgressString());
 	}
 	else
 	{
@@ -527,17 +527,20 @@ void SPlasticSourceControlSettings::OnSourceControlOperationComplete(const FSour
 }
 
 // Display an ongoing notification during the whole operation
-void SPlasticSourceControlSettings::DisplayInProgressNotification(const FSourceControlOperationRef& InOperation)
+void SPlasticSourceControlSettings::DisplayInProgressNotification(const FText& InOperationInProgressString)
 {
-	FNotificationInfo Info(InOperation->GetInProgressString());
-	Info.bFireAndForget = false;
-	Info.ExpireDuration = 0.0f;
-	Info.FadeOutDuration = 1.0f;
-	OperationInProgressNotification = FSlateNotificationManager::Get().AddNotification(Info);
-	if (OperationInProgressNotification.IsValid())
-	{
-		OperationInProgressNotification.Pin()->SetCompletionState(SNotificationItem::CS_Pending);
-	}
+    if (!OperationInProgressNotification.IsValid())
+    {
+        FNotificationInfo Info(InOperationInProgressString);
+        Info.bFireAndForget = false;
+        Info.ExpireDuration = 0.0f;
+        Info.FadeOutDuration = 1.0f;
+        OperationInProgressNotification = FSlateNotificationManager::Get().AddNotification(Info);
+        if (OperationInProgressNotification.IsValid())
+        {
+            OperationInProgressNotification.Pin()->SetCompletionState(SNotificationItem::CS_Pending);
+        }
+    }
 }
 
 // Remove the ongoing notification at the end of the operation
@@ -576,7 +579,7 @@ void SPlasticSourceControlSettings::DisplayFailureNotification(const FName& InOp
 /** Delegate to check for presence of a Plastic ignore.conf file to an existing Plastic SCM workspace */
 EVisibility SPlasticSourceControlSettings::CanAddIgnoreFile() const
 {
-	FPlasticSourceControlModule& PlasticSourceControl = FModuleManager::LoadModuleChecked<FPlasticSourceControlModule>("PlasticSourceControl");
+   const FPlasticSourceControlModule& PlasticSourceControl = FModuleManager::LoadModuleChecked<FPlasticSourceControlModule>("PlasticSourceControl");
 	const bool bPlasticWorkspaceFound = PlasticSourceControl.GetProvider().IsWorkspaceFound();
 	const bool bIgnoreFileFound = FPaths::FileExists(GetIgnoreFileName());
 	return (bPlasticWorkspaceFound && !bIgnoreFileFound) ? EVisibility::Visible : EVisibility::Collapsed;
@@ -610,7 +613,7 @@ const FString& SPlasticSourceControlSettings::GetIgnoreFileName() const
 /** Create a standard "ignore.conf" file with common patterns for a typical Blueprint & C++ project */
 bool SPlasticSourceControlSettings::CreateIgnoreFile() const
 {
-	const FString IgnoreFileContent = TEXT("Binaries\nBuild\nDerivedDataCache\nIntermediate\nSaved\n.vs\n*.VC.db\n*.opensdf\n*.opendb\n*.sdf\n*.sln\n*.suo\n*.xcodeproj\n*.xcworkspace");
+	const FString IgnoreFileContent = TEXT("Binaries\nBuild\nDerivedDataCache\nIntermediate\nSaved\n.vscode\n.vs\n*.VC.db\n*.opensdf\n*.opendb\n*.sdf\n*.sln\n*.suo\n*.xcodeproj\n*.xcworkspace");
 	return FFileHelper::SaveStringToFile(IgnoreFileContent, *GetIgnoreFileName(), FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
 }
 

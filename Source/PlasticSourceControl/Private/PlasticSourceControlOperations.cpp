@@ -1,4 +1,4 @@
-// Copyright (c) 2016-2017 Codice Software - Sebastien Rombauts (sebastien.rombauts@gmail.com)
+// Copyright (c) 2016-2018 Codice Software - Sebastien Rombauts (sebastien.rombauts@gmail.com)
 
 #include "PlasticSourceControlPrivatePCH.h"
 #include "PlasticSourceControlOperations.h"
@@ -10,7 +10,7 @@
 
 #include "HAL/FileManager.h"
 #include "Misc/Paths.h"
-#include "Async.h"
+#include "Async/Async.h"
 
 #define LOCTEXT_NAMESPACE "PlasticSourceControl"
 
@@ -55,7 +55,7 @@ bool FPlasticConnectWorker::Execute(FPlasticSourceControlCommand& InCommand)
 	check(InCommand.Operation->GetName() == GetName());
 	TSharedRef<FConnect, ESPMode::ThreadSafe> Operation = StaticCastSharedRef<FConnect>(InCommand.Operation);
 
-	FPlasticSourceControlModule& PlasticSourceControl = FModuleManager::GetModuleChecked<FPlasticSourceControlModule>("PlasticSourceControl");
+	const FPlasticSourceControlModule& PlasticSourceControl = FModuleManager::GetModuleChecked<FPlasticSourceControlModule>("PlasticSourceControl");
 	if (PlasticSourceControl.GetProvider().IsPlasticAvailable())
 	{
 		// Get workspace name
@@ -331,7 +331,7 @@ bool FPlasticRevertWorker::Execute(FPlasticSourceControlCommand& InCommand)
 
 bool FPlasticRevertWorker::UpdateStates() const
 {
-	return PlasticSourceControlUtils::UpdateCachedStates(States);
+	return false;
 }
 
 FName FPlasticRevertUnchangedWorker::GetName() const

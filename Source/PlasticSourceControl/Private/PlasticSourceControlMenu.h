@@ -1,17 +1,14 @@
-// Copyright (c) 2016-2017 Codice Software - Sebastien Rombauts (sebastien.rombauts@gmail.com)
+// Copyright (c) 2016-2018 Codice Software - Sebastien Rombauts (sebastien.rombauts@gmail.com)
 
 #pragma once
 
 #include "CoreMinimal.h"
 #include "ISourceControlProvider.h"
 
-#include "ISourceControlOperation.h"
-#include "SourceControlOperations.h"
-#include "PlasticSourceControlOperations.h"
-
 class FToolBarBuilder;
 class FMenuBuilder;
 
+/** Plastic SCM extension of the Source Control toolbar menu */
 class FPlasticSourceControlMenu
 {
 public:
@@ -27,24 +24,29 @@ public:
 private:
 	bool IsSourceControlConnected() const;
 
+	bool				SaveDirtyPackages();
+	TArray<FString>		ListAllPackages();
+	TArray<UPackage*>	UnlinkPackages(const TArray<FString>& InPackageNames);
+	void				ReloadPackages(TArray<UPackage*>& InPackagesToReload);
+
 	void AddMenuExtension(FMenuBuilder& Builder);
 
 	TSharedRef<class FExtender> OnExtendLevelEditorViewMenu(const TSharedRef<class FUICommandList> CommandList);
 
-	void DisplayInProgressNotification(const FSourceControlOperationRef& InOperation);
+	void DisplayInProgressNotification(const FText& InOperationInProgressString);
 	void RemoveInProgressNotification();
-	void DisplaySucessNotification(const FSourceControlOperationRef& InOperation);
-	void DisplayFailureNotification(const FSourceControlOperationRef& InOperation);
+	void DisplaySucessNotification(const FName& InOperationName);
+	void DisplayFailureNotification(const FName& InOperationName);
 
 private:
 	FDelegateHandle ViewMenuExtenderHandle;
 
-	/** Current source control operation from menu if any */
-	TSharedPtr<FSync, ESPMode::ThreadSafe> SyncOperation;
-	TSharedPtr<FPlasticRevertUnchanged, ESPMode::ThreadSafe> RevertUnchangedOperation;
-	TSharedPtr<FPlasticRevertAll, ESPMode::ThreadSafe> RevertAllOperation;
-	TSharedPtr<FUpdateStatus, ESPMode::ThreadSafe> RefreshOperation;
+	/** Loaded packages to reload after a Sync or Revert operation */
+	TArray<UPackage*> PackagesToReload;
+
+	/** Current source control operation from extended menu if any */
 	TWeakPtr<class SNotificationItem> OperationInProgressNotification;
+
 	/** Delegate called when a source control operation has completed */
 	void OnSourceControlOperationComplete(const FSourceControlOperationRef& InOperation, ECommandResult::Type InResult);
 };

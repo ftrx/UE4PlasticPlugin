@@ -1,4 +1,4 @@
-// Copyright (c) 2016-2017 Codice Software - Sebastien Rombauts (sebastien.rombauts@gmail.com)
+// Copyright (c) 2016-2018 Codice Software - Sebastien Rombauts (sebastien.rombauts@gmail.com)
 
 #include "PlasticSourceControlPrivatePCH.h"
 #include "PlasticSourceControlProvider.h"
@@ -9,9 +9,9 @@
 #include "PlasticSourceControlOperations.h"
 #include "PlasticSourceControlUtils.h"
 #include "SPlasticSourceControlSettings.h"
-#include "MessageLog.h"
+#include "Logging/MessageLog.h"
 #include "ScopedSourceControlProgress.h"
-#include "IPluginManager.h"
+#include "Interfaces/IPluginManager.h"
 
 #include "Misc/Paths.h"
 #include "HAL/PlatformProcess.h"
@@ -147,6 +147,25 @@ bool FPlasticSourceControlProvider::IsAvailable() const
 const FName& FPlasticSourceControlProvider::GetName(void) const
 {
 	return ProviderName;
+}
+
+/**
+ * Register branches to query for state in addition to the current branch
+ * @param	BranchNames			Names of the branches to query
+ * @param	ContentRoot			Path to the content root for branch mapping
+ */
+void FPlasticSourceControlProvider::RegisterStateBranches(const TArray<FString>& BranchNames, const FString& ContentRoot)
+{
+}
+
+/**
+ *Gets the state index of the specified branch, higher index branches are generally closer to releases
+ * @param	BranchName			Names of the branches to query
+ * @return	the index of the specified branch
+ */
+int32 FPlasticSourceControlProvider::GetStateBranchIndex(const FString& BranchName) const
+{
+	return 0;
 }
 
 ECommandResult::Type FPlasticSourceControlProvider::GetState( const TArray<FString>& InFiles, TArray< TSharedRef<ISourceControlState, ESPMode::ThreadSafe> >& OutState, EStateCacheUsage::Type InStateCacheUsage )
@@ -425,7 +444,7 @@ ECommandResult::Type FPlasticSourceControlProvider::ExecuteSynchronousCommand(FP
 		else
 		{
 			// TODO If the command failed, inform the user that they need to try again (see Perforce)
-			//FMessageDialog::Open( EAppMsgType::Ok, LOCTEXT("Git_ServerUnresponsive", "Git LFS server is unresponsive. Please check your connection and try again.") );
+			//FMessageDialog::Open( EAppMsgType::Ok, LOCTEXT("Plastic_ServerUnresponsive", "Plastic server is unresponsive. Please check your connection and try again.") );
 
 			UE_LOG(LogSourceControl, Error, TEXT("Command '%s' Failed!"), *InCommand.Operation->GetName().ToString());
 		}

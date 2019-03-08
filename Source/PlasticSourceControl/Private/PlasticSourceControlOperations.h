@@ -1,4 +1,4 @@
-// Copyright (c) 2016-2017 Codice Software - Sebastien Rombauts (sebastien.rombauts@gmail.com)
+// Copyright (c) 2016-2018 Codice Software - Sebastien Rombauts (sebastien.rombauts@gmail.com)
 
 // Specialization of classes defineds in Engine\Source\Developer\SourceControl\Public\SourceControlOperations.h
 
@@ -139,10 +139,6 @@ public:
 	virtual FName GetName() const override;
 	virtual bool Execute(class FPlasticSourceControlCommand& InCommand) override;
 	virtual bool UpdateStates() const override;
-
-public:
-	/** Temporary states for results */
-	TArray<FPlasticSourceControlState> States;
 };
 
 /** Revert only unchanged file(s) (uncheckout). */

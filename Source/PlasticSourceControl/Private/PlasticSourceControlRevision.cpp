@@ -1,4 +1,4 @@
-// Copyright (c) 2016-2017 Codice Software - Sebastien Rombauts (sebastien.rombauts@gmail.com)
+// Copyright (c) 2016-2018 Codice Software - Sebastien Rombauts (sebastien.rombauts@gmail.com)
 
 #include "PlasticSourceControlPrivatePCH.h"
 #include "PlasticSourceControlRevision.h"
@@ -14,7 +14,7 @@
 
 bool FPlasticSourceControlRevision::Get( FString& InOutFilename ) const
 {
-	FPlasticSourceControlModule& PlasticSourceControl = FModuleManager::LoadModuleChecked<FPlasticSourceControlModule>("PlasticSourceControl");
+	const FPlasticSourceControlModule& PlasticSourceControl = FModuleManager::LoadModuleChecked<FPlasticSourceControlModule>("PlasticSourceControl");
 	const FString& PathToPlasticBinary = PlasticSourceControl.AccessSettings().GetBinaryPath();
 	const FString& RepositoryName = PlasticSourceControl.GetProvider().GetRepositoryName();
 	const FString& ServerUrl = PlasticSourceControl.GetProvider().GetServerUrl();

@@ -1,11 +1,16 @@
-// Copyright (c) 2016-2017 Codice Software - Sebastien Rombauts (sebastien.rombauts@gmail.com)
+// Copyright (c) 2016-2018 Codice Software - Sebastien Rombauts (sebastien.rombauts@gmail.com)
 
 #include "PlasticSourceControlPrivatePCH.h"
 
 #include "PlasticSourceControlMenu.h"
 
+#include "PlasticSourceControlModule.h"
 #include "PlasticSourceControlProvider.h"
 #include "PlasticSourceControlOperations.h"
+
+#include "ISourceControlModule.h"
+#include "ISourceControlOperation.h"
+#include "SourceControlOperations.h"
 
 #include "LevelEditor.h"
 #include "Widgets/Notifications/SNotificationList.h"
@@ -14,6 +19,11 @@
 #include "Misc/MessageDialog.h"
 #include "EditorStyleSet.h"
 
+#include "PackageTools.h"
+#include "FileHelpers.h"
+
+#include "Logging/MessageLog.h"
+
 static const FName PlasticSourceControlMenuTabName("PlasticSourceControlMenu");
 
 #define LOCTEXT_NAMESPACE "PlasticSourceControl"
@@ -21,27 +31,23 @@ static const FName PlasticSourceControlMenuTabName("PlasticSourceControlMenu");
 void FPlasticSourceControlMenu::Register()
 {
 	// Register the extension with the level editor
+	FLevelEditorModule* LevelEditorModule = FModuleManager::GetModulePtr<FLevelEditorModule>("LevelEditor");
+	if (LevelEditorModule)
 	{
-		FLevelEditorModule* LevelEditorModule = FModuleManager::GetModulePtr<FLevelEditorModule>("LevelEditor");
-		if (LevelEditorModule)
-		{
-			FLevelEditorModule::FLevelEditorMenuExtender ViewMenuExtender = FLevelEditorModule::FLevelEditorMenuExtender::CreateRaw(this, &FPlasticSourceControlMenu::OnExtendLevelEditorViewMenu);
-			auto& MenuExtenders = LevelEditorModule->GetAllLevelEditorToolbarSourceControlMenuExtenders();
-			MenuExtenders.Add(ViewMenuExtender);
-			ViewMenuExtenderHandle = MenuExtenders.Last().GetHandle();
-		}
+		FLevelEditorModule::FLevelEditorMenuExtender ViewMenuExtender = FLevelEditorModule::FLevelEditorMenuExtender::CreateRaw(this, &FPlasticSourceControlMenu::OnExtendLevelEditorViewMenu);
+		auto& MenuExtenders = LevelEditorModule->GetAllLevelEditorToolbarSourceControlMenuExtenders();
+		MenuExtenders.Add(ViewMenuExtender);
+		ViewMenuExtenderHandle = MenuExtenders.Last().GetHandle();
 	}
 }
 
 void FPlasticSourceControlMenu::Unregister()
 {
 	// Unregister the level editor extensions
+	FLevelEditorModule* LevelEditorModule = FModuleManager::GetModulePtr<FLevelEditorModule>("LevelEditor");
+	if (LevelEditorModule)
 	{
-		FLevelEditorModule* LevelEditorModule = FModuleManager::GetModulePtr<FLevelEditorModule>("LevelEditor");
-		if (LevelEditorModule)
-		{
-			LevelEditorModule->GetAllLevelEditorToolbarSourceControlMenuExtenders().RemoveAll([=](const FLevelEditorModule::FLevelEditorMenuExtender& Extender) { return Extender.GetHandle() == ViewMenuExtenderHandle; });
-		}
+		LevelEditorModule->GetAllLevelEditorToolbarSourceControlMenuExtenders().RemoveAll([=](const FLevelEditorModule::FLevelEditorMenuExtender& Extender) { return Extender.GetHandle() == ViewMenuExtenderHandle; });
 	}
 }
 
@@ -51,134 +57,270 @@ bool FPlasticSourceControlMenu::IsSourceControlConnected() const
 	return Provider.IsEnabled() && Provider.IsAvailable();
 }
 
-void FPlasticSourceControlMenu::SyncProjectClicked()
+/// Prompt to save or discard all packages
+bool FPlasticSourceControlMenu::SaveDirtyPackages()
 {
-	if (!SyncOperation.IsValid())
+	const bool bPromptUserToSave = true;
+	const bool bSaveMapPackages = true;
+	const bool bSaveContentPackages = true;
+	const bool bFastSave = false;
+	const bool bNotifyNoPackagesSaved = false;
+	const bool bCanBeDeclined = true; // If the user clicks "don't save" this will continue and lose their changes
+	bool bHadPackagesToSave = false;
+
+	bool bSaved = FEditorFileUtils::SaveDirtyPackages(bPromptUserToSave, bSaveMapPackages, bSaveContentPackages, bFastSave, bNotifyNoPackagesSaved, bCanBeDeclined, &bHadPackagesToSave);
+
+	// bSaved can be true if the user selects to not save an asset by unchecking it and clicking "save"
+	if (bSaved)
 	{
-		// Launch a "Sync" Operation
-		ISourceControlModule& SourceControl = FModuleManager::LoadModuleChecked<ISourceControlModule>("SourceControl");
-		FPlasticSourceControlProvider& Provider = static_cast<FPlasticSourceControlProvider&>(SourceControl.GetProvider());
-		SyncOperation = ISourceControlOperation::Create<FSync>();
-		TArray<FString> Files;
-		Files.Add(Provider.GetPathToWorkspaceRoot()); // Sync the root of the workspace (needs an absolute path)
-		ECommandResult::Type Result = Provider.Execute(SyncOperation.ToSharedRef(), Files, EConcurrency::Asynchronous, FSourceControlOperationComplete::CreateRaw(this, &FPlasticSourceControlMenu::OnSourceControlOperationComplete));
-		if (Result == ECommandResult::Succeeded)
+		TArray<UPackage*> DirtyPackages;
+		FEditorFileUtils::GetDirtyWorldPackages(DirtyPackages);
+		FEditorFileUtils::GetDirtyContentPackages(DirtyPackages);
+		bSaved = DirtyPackages.Num() == 0;
+	}
+
+	return bSaved;
+}
+
+/// Find all packages in Content directory
+TArray<FString> FPlasticSourceControlMenu::ListAllPackages()
+{
+	TArray<FString> PackageRelativePaths;
+	FPackageName::FindPackagesInDirectory(PackageRelativePaths, *FPaths::ConvertRelativePathToFull(FPaths::ProjectContentDir()));
+
+	TArray<FString> PackageNames;
+	PackageNames.Reserve(PackageRelativePaths.Num());
+	for (const FString& Path : PackageRelativePaths)
+	{
+		FString PackageName;
+		FString FailureReason;
+		if (FPackageName::TryConvertFilenameToLongPackageName(Path, PackageName, &FailureReason))
 		{
-			// Display an ongoing notification during the whole operation
-			DisplayInProgressNotification(SyncOperation.ToSharedRef());
+			PackageNames.Add(PackageName);
 		}
 		else
 		{
-			// Report failure with a notification
-			DisplayFailureNotification(SyncOperation.ToSharedRef());
-			SyncOperation.Reset();
+			FMessageLog("SourceControl").Error(FText::FromString(FailureReason));
+		}
+	}
+
+	return PackageNames;
+}
+
+/// Unkink all loaded packages to allow to update them
+TArray<UPackage*> FPlasticSourceControlMenu::UnlinkPackages(const TArray<FString>& InPackageNames)
+{
+	TArray<UPackage*> LoadedPackages;
+
+	// Inspired from ContentBrowserUtils::SyncPathsFromSourceControl()
+	if (InPackageNames.Num() > 0)
+	{
+		// Form a list of loaded packages to reload...
+		LoadedPackages.Reserve(InPackageNames.Num());
+		for (const FString& PackageName : InPackageNames)
+		{
+			UPackage* Package = FindPackage(nullptr, *PackageName);
+			if (Package)
+			{
+				LoadedPackages.Emplace(Package);
+
+				// Detach the linkers of any loaded packages so that SCC can overwrite the files...
+				if (!Package->IsFullyLoaded())
+				{
+					FlushAsyncLoading();
+					Package->FullyLoad();
+				}
+				ResetLoaders(Package);
+			}
+		}
+		UE_LOG(LogSourceControl, Log, TEXT("Reseted Loader for %d Packages"), LoadedPackages.Num());
+	}
+
+	return LoadedPackages;
+}
+
+void FPlasticSourceControlMenu::ReloadPackages(TArray<UPackage*>& InPackagesToReload)
+{
+	UE_LOG(LogSourceControl, Log, TEXT("Reloading %d Packages..."), InPackagesToReload.Num());
+
+	// Syncing may have deleted some packages, so we need to unload those rather than re-load them...
+	TArray<UPackage*> PackagesToUnload;
+	InPackagesToReload.RemoveAll([&](UPackage* InPackage) -> bool
+	{
+		const FString PackageExtension = InPackage->ContainsMap() ? FPackageName::GetMapPackageExtension() : FPackageName::GetAssetPackageExtension();
+		const FString PackageFilename = FPackageName::LongPackageNameToFilename(InPackage->GetName(), PackageExtension);
+		if (!FPaths::FileExists(PackageFilename))
+		{
+			PackagesToUnload.Emplace(InPackage);
+			return true; // remove package
+		}
+		return false; // keep package
+	});
+
+	// Hot-reload the new packages...
+	PackageTools::ReloadPackages(InPackagesToReload);
+
+	// Unload any deleted packages...
+	PackageTools::UnloadPackages(PackagesToUnload);
+}
+
+void FPlasticSourceControlMenu::SyncProjectClicked()
+{
+	if (!OperationInProgressNotification.IsValid())
+	{
+		const bool bSaved = SaveDirtyPackages();
+		if (bSaved)
+		{
+			// Find and Unlink all packages in Content directory to allow to update them
+			PackagesToReload = UnlinkPackages(ListAllPackages());
+
+			// Launch a "Sync" operation
+			FPlasticSourceControlModule& PlasticSourceControl = FModuleManager::LoadModuleChecked<FPlasticSourceControlModule>("PlasticSourceControl");
+			FPlasticSourceControlProvider& Provider = PlasticSourceControl.GetProvider();
+			TSharedRef<FSync, ESPMode::ThreadSafe> SyncOperation = ISourceControlOperation::Create<FSync>();
+			const ECommandResult::Type Result = Provider.Execute(SyncOperation, TArray<FString>(), EConcurrency::Asynchronous, FSourceControlOperationComplete::CreateRaw(this, &FPlasticSourceControlMenu::OnSourceControlOperationComplete));
+			if (Result == ECommandResult::Succeeded)
+			{
+				// Display an ongoing notification during the whole operation (packages will be reloaded at the completion of the operation)
+				DisplayInProgressNotification(SyncOperation->GetInProgressString());
+			}
+			else
+			{
+				// Report failure with a notification and Reload all packages
+				DisplayFailureNotification(SyncOperation->GetName());
+				ReloadPackages(PackagesToReload);
+			}
+		}
+		else
+		{
+			FMessageLog SourceControlLog("SourceControl");
+			SourceControlLog.Warning(LOCTEXT("SourceControlMenu_Sync_Unsaved", "Save All Assets before attempting to Sync!"));
+			SourceControlLog.Notify();
 		}
 	}
 	else
 	{
-		UE_LOG(LogSourceControl, Warning, TEXT("Source control operation already in progress!"));
+		FMessageLog SourceControlLog("SourceControl");
+		SourceControlLog.Warning(LOCTEXT("SourceControlMenu_InProgress", "Source control operation already in progress"));
+		SourceControlLog.Notify();
 	}
 }
 
 void FPlasticSourceControlMenu::RevertUnchangedClicked()
 {
-	if (!RevertUnchangedOperation.IsValid())
+	if (!OperationInProgressNotification.IsValid())
 	{
 		// Launch a "RevertUnchanged" Operation
-		ISourceControlModule& SourceControl = FModuleManager::LoadModuleChecked<ISourceControlModule>("SourceControl");
-		FPlasticSourceControlProvider& Provider = static_cast<FPlasticSourceControlProvider&>(SourceControl.GetProvider());
-		RevertUnchangedOperation = ISourceControlOperation::Create<FPlasticRevertUnchanged>();
-		TArray<FString> Files;
-		Files.Add(Provider.GetPathToWorkspaceRoot()); // Revert the root of the workspace (needs an absolute path)
-		ECommandResult::Type Result = Provider.Execute(RevertUnchangedOperation.ToSharedRef(), Files, EConcurrency::Asynchronous, FSourceControlOperationComplete::CreateRaw(this, &FPlasticSourceControlMenu::OnSourceControlOperationComplete));
+		FPlasticSourceControlModule& PlasticSourceControl = FModuleManager::LoadModuleChecked<FPlasticSourceControlModule>("PlasticSourceControl");
+		FPlasticSourceControlProvider& Provider = PlasticSourceControl.GetProvider();
+		TSharedRef<FPlasticRevertUnchanged, ESPMode::ThreadSafe> RevertUnchangedOperation = ISourceControlOperation::Create<FPlasticRevertUnchanged>();
+		TArray<FString> WorkspaceRoot;
+		WorkspaceRoot.Add(Provider.GetPathToWorkspaceRoot()); // Revert the root of the workspace (needs an absolute path)
+		const ECommandResult::Type Result = Provider.Execute(RevertUnchangedOperation, WorkspaceRoot, EConcurrency::Asynchronous, FSourceControlOperationComplete::CreateRaw(this, &FPlasticSourceControlMenu::OnSourceControlOperationComplete));
 		if (Result == ECommandResult::Succeeded)
 		{
 			// Display an ongoing notification during the whole operation
-			DisplayInProgressNotification(RevertUnchangedOperation.ToSharedRef());
+			DisplayInProgressNotification(RevertUnchangedOperation->GetInProgressString());
 		}
 		else
 		{
 			// Report failure with a notification
-			DisplayFailureNotification(RevertUnchangedOperation.ToSharedRef());
-			RevertUnchangedOperation.Reset();
+			DisplayFailureNotification(RevertUnchangedOperation->GetName());
 		}
 	}
 	else
 	{
-		UE_LOG(LogSourceControl, Warning, TEXT("Source control operation already in progress!"));
+		FMessageLog SourceControlLog("SourceControl");
+		SourceControlLog.Warning(LOCTEXT("SourceControlMenu_InProgress", "Source control operation already in progress"));
+		SourceControlLog.Notify();
 	}
 }
 
 void FPlasticSourceControlMenu::RevertAllClicked()
 {
-	if (!RevertAllOperation.IsValid())
+	if (!OperationInProgressNotification.IsValid())
 	{
 		// Ask the user before reverting all!
 		const FText DialogText(LOCTEXT("SourceControlMenu_AskRevertAll", "Revert all modifications into the workspace?"));
 		const EAppReturnType::Type Choice = FMessageDialog::Open(EAppMsgType::OkCancel, DialogText);
 		if (Choice == EAppReturnType::Ok)
 		{
-			// Launch a "RevertAll" Operation
-			ISourceControlModule& SourceControl = FModuleManager::LoadModuleChecked<ISourceControlModule>("SourceControl");
-			FPlasticSourceControlProvider& Provider = static_cast<FPlasticSourceControlProvider&>(SourceControl.GetProvider());
-			RevertAllOperation = ISourceControlOperation::Create<FPlasticRevertAll>();
-			TArray<FString> Files;
-			Files.Add(Provider.GetPathToWorkspaceRoot()); // Revert the root of the workspace (needs an absolute path)
-			ECommandResult::Type Result = Provider.Execute(RevertAllOperation.ToSharedRef(), Files, EConcurrency::Asynchronous, FSourceControlOperationComplete::CreateRaw(this, &FPlasticSourceControlMenu::OnSourceControlOperationComplete));
-			if (Result == ECommandResult::Succeeded)
+			const bool bSaved = SaveDirtyPackages();
+			if (bSaved)
 			{
-				// Display an ongoing notification during the whole operation
-				DisplayInProgressNotification(RevertAllOperation.ToSharedRef());
+				// Find and Unlink all packages in Content directory to allow to update them
+				PackagesToReload = UnlinkPackages(ListAllPackages());
+
+				// Launch a "RevertAll" Operation
+				FPlasticSourceControlModule& PlasticSourceControl = FModuleManager::LoadModuleChecked<FPlasticSourceControlModule>("PlasticSourceControl");
+				FPlasticSourceControlProvider& Provider = PlasticSourceControl.GetProvider();
+				TSharedRef<FPlasticRevertAll, ESPMode::ThreadSafe> RevertAllOperation = ISourceControlOperation::Create<FPlasticRevertAll>();
+				TArray<FString> WorkspaceRoot;
+				WorkspaceRoot.Add(Provider.GetPathToWorkspaceRoot()); // Revert the root of the workspace (needs an absolute path)
+				const ECommandResult::Type Result = Provider.Execute(RevertAllOperation, WorkspaceRoot, EConcurrency::Asynchronous, FSourceControlOperationComplete::CreateRaw(this, &FPlasticSourceControlMenu::OnSourceControlOperationComplete));
+				if (Result == ECommandResult::Succeeded)
+				{
+					// Display an ongoing notification during the whole operation
+					DisplayInProgressNotification(RevertAllOperation->GetInProgressString());
+				}
+				else
+				{
+					// Report failure with a notification and Reload all packages
+					DisplayFailureNotification(RevertAllOperation->GetName());
+					ReloadPackages(PackagesToReload);
+				}
 			}
 			else
 			{
-				// Report failure with a notification
-				DisplayFailureNotification(RevertAllOperation.ToSharedRef());
-				RevertAllOperation.Reset();
+				FMessageLog SourceControlLog("SourceControl");
+				SourceControlLog.Warning(LOCTEXT("SourceControlMenu_Sync_Unsaved", "Save All Assets before attempting to Sync!"));
+				SourceControlLog.Notify();
 			}
 		}
 	}
 	else
 	{
-		UE_LOG(LogSourceControl, Warning, TEXT("Source control operation already in progress!"));
+		FMessageLog SourceControlLog("SourceControl");
+		SourceControlLog.Warning(LOCTEXT("SourceControlMenu_InProgress", "Source control operation already in progress"));
+		SourceControlLog.Notify();
 	}
 }
 
 void FPlasticSourceControlMenu::RefreshClicked()
 {
-	if (!RefreshOperation.IsValid())
+	if (!OperationInProgressNotification.IsValid())
 	{
 		// Launch an "UpdateStatus" Operation
-		ISourceControlModule& SourceControl = FModuleManager::LoadModuleChecked<ISourceControlModule>("SourceControl");
-		FPlasticSourceControlProvider& Provider = static_cast<FPlasticSourceControlProvider&>(SourceControl.GetProvider());
-		RefreshOperation = ISourceControlOperation::Create<FUpdateStatus>();
+		FPlasticSourceControlModule& PlasticSourceControl = FModuleManager::LoadModuleChecked<FPlasticSourceControlModule>("PlasticSourceControl");
+		FPlasticSourceControlProvider& Provider = PlasticSourceControl.GetProvider();
+		TSharedRef<FUpdateStatus, ESPMode::ThreadSafe> RefreshOperation = ISourceControlOperation::Create<FUpdateStatus>();
 		RefreshOperation->SetCheckingAllFiles(true);
-		RefreshOperation->SetGetOpenedOnly(true);
-		ECommandResult::Type Result = Provider.Execute(RefreshOperation.ToSharedRef(), TArray<FString>(), EConcurrency::Asynchronous, FSourceControlOperationComplete::CreateRaw(this, &FPlasticSourceControlMenu::OnSourceControlOperationComplete));
+		const ECommandResult::Type Result = Provider.Execute(RefreshOperation, TArray<FString>(), EConcurrency::Asynchronous, FSourceControlOperationComplete::CreateRaw(this, &FPlasticSourceControlMenu::OnSourceControlOperationComplete));
 		if (Result == ECommandResult::Succeeded)
 		{
 			// Display an ongoing notification during the whole operation
-			DisplayInProgressNotification(RefreshOperation.ToSharedRef());
+			DisplayInProgressNotification(RefreshOperation->GetInProgressString());
 		}
 		else
 		{
 			// Report failure with a notification
-			DisplayFailureNotification(RefreshOperation.ToSharedRef());
-			RefreshOperation.Reset();
+			DisplayFailureNotification(RefreshOperation->GetName());
 		}
 	}
 	else
 	{
-		UE_LOG(LogSourceControl, Warning, TEXT("Source control operation already in progress!"));
+		FMessageLog SourceControlLog("SourceControl");
+		SourceControlLog.Warning(LOCTEXT("SourceControlMenu_InProgress", "Source control operation already in progress"));
+		SourceControlLog.Notify();
 	}
 }
 
 // Display an ongoing notification during the whole operation
-void FPlasticSourceControlMenu::DisplayInProgressNotification(const FSourceControlOperationRef& InOperation)
+void FPlasticSourceControlMenu::DisplayInProgressNotification(const FText& InOperationInProgressString)
 {
 	if (!OperationInProgressNotification.IsValid())
 	{
-		FNotificationInfo Info(InOperation->GetInProgressString());
+		FNotificationInfo Info(InOperationInProgressString);
 		Info.bFireAndForget = false;
 		Info.ExpireDuration = 0.0f;
 		Info.FadeOutDuration = 1.0f;
@@ -201,11 +343,11 @@ void FPlasticSourceControlMenu::RemoveInProgressNotification()
 }
 
 // Display a temporary success notification at the end of the operation
-void FPlasticSourceControlMenu::DisplaySucessNotification(const FSourceControlOperationRef& InOperation)
+void FPlasticSourceControlMenu::DisplaySucessNotification(const FName& InOperationName)
 {
 	const FText NotificationText = FText::Format(
 		LOCTEXT("SourceControlMenu_Success", "{0} operation was successful!"),
-		FText::FromName(InOperation->GetName())
+		FText::FromName(InOperationName)
 	);
 	FNotificationInfo Info(NotificationText);
 	Info.bUseSuccessFailIcons = true;
@@ -215,55 +357,36 @@ void FPlasticSourceControlMenu::DisplaySucessNotification(const FSourceControlOp
 }
 
 // Display a temporary failure notification at the end of the operation
-void FPlasticSourceControlMenu::DisplayFailureNotification(const FSourceControlOperationRef& InOperation)
+void FPlasticSourceControlMenu::DisplayFailureNotification(const FName& InOperationName)
 {
 	const FText NotificationText = FText::Format(
 		LOCTEXT("SourceControlMenu_Failure", "Error: {0} operation failed!"),
-		FText::FromName(InOperation->GetName())
+		FText::FromName(InOperationName)
 	);
 	FNotificationInfo Info(NotificationText);
 	Info.ExpireDuration = 8.0f;
 	FSlateNotificationManager::Get().AddNotification(Info);
-	UE_LOG(LogSourceControl, Log, TEXT("%s"), *NotificationText.ToString());
+	UE_LOG(LogSourceControl, Error, TEXT("%s"), *NotificationText.ToString());
 }
 
 void FPlasticSourceControlMenu::OnSourceControlOperationComplete(const FSourceControlOperationRef& InOperation, ECommandResult::Type InResult)
 {
-	if (InOperation->GetName() == "Sync")
-	{
-		check(SyncOperation == StaticCastSharedRef<FSync>(InOperation));
-		SyncOperation.Reset();
-	}
-	else if (InOperation->GetName() == "RevertUnchanged")
-	{
-		check(RevertUnchangedOperation == StaticCastSharedRef<FPlasticRevertUnchanged>(InOperation));
-		RevertUnchangedOperation.Reset();
-	}
-	else if (InOperation->GetName() == "RevertAll")
-	{
-		check(RevertAllOperation == StaticCastSharedRef<FPlasticRevertAll>(InOperation));
-		RevertAllOperation.Reset();
-	}
-	else if (InOperation->GetName() == "UpdateStatus")
-	{
-		check(RefreshOperation == StaticCastSharedRef<FUpdateStatus>(InOperation));
-		RefreshOperation.Reset();
-	}
-	else
-	{
-		UE_LOG(LogSourceControl, Error, TEXT("Unknown operation '%s'"), *InOperation->GetName().ToString());
-	}
-
 	RemoveInProgressNotification();
+
+	if ((InOperation->GetName() == "Sync") || (InOperation->GetName() == "RevertAll"))
+	{
+		// Reload packages that where unlinked at the beginning of the Sync operation
+		ReloadPackages(PackagesToReload);
+	}
 
 	// Report result with a notification
 	if (InResult == ECommandResult::Succeeded)
 	{
-		DisplaySucessNotification(InOperation);
+		DisplaySucessNotification(InOperation->GetName());
 	}
 	else
 	{
-		DisplayFailureNotification(InOperation);
+		DisplayFailureNotification(InOperation->GetName());
 	}
 }
 
@@ -300,7 +423,7 @@ void FPlasticSourceControlMenu::AddMenuExtension(FMenuBuilder& Builder)
 	);
 
 	Builder.AddMenuEntry(
-		LOCTEXT("PlasticRefresh",			"Refresh All"),
+		LOCTEXT("PlasticRefresh",			"Refresh"),
 		LOCTEXT("PlasticRefreshTooltip",	"Update the source control status of all files in the workspace."),
 		FSlateIcon(FEditorStyle::GetStyleSetName(), "SourceControl.Actions.Refresh"),
 		FUIAction(
